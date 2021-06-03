@@ -1,0 +1,273 @@
+---
+title: "marketing_data_eda"
+author: "Kevin"
+date: "30 May 2021"
+output: rmarkdown::github_document
+---
+
+```{r, warning=FALSE}
+library(tidyverse)
+library(data.table)
+library(lubridate)
+library(corrplot)
+```
+
+```{r}
+marketing_raw <- fread('data/marketing_data.csv', colClasses = c('Education'='factor', 'Marital_Status'='factor',
+                                                                 'Country'='factor'))
+head(marketing_raw)
+```
+
+## About data - 
+Data is from a iFood CRM(mentioned in kaggle discussions). It is a Brazilian food delivery platform. Data is of customers who made purchase in the last 100 days.
+
+## Classes of variables - 
+1) Customer Attributes
+2) Amount spent on different product groups
+3) Number of Purchases through Channels and visits
+4) Success after each campaign
+
+The means of AcceptedCmp and Response and Complain will give the percentage of 1's in the columns.
+Most AcceptedCmp have a 7% success rate. 
+
+```{r}
+marketing_proc <- marketing_raw %>% 
+  mutate(Dt_Customer = mdy(Dt_Customer),  
+         Income = as.double(str_replace_all(Income, "[$,]", "")),
+         Age=2014-Year_Birth,
+         People_at_home = if_else(Marital_Status %in% c('Married','Together'), Kidhome+Teenhome+2, Kidhome+Teenhome+1),
+         Age_bin = case_when(Age<35 ~ '<35',
+                             Age<45 ~ '35-44',
+                             Age<60 ~ '45-59',
+                             TRUE ~ '>=60'),
+         Income_bin = case_when(Income<35000 ~ '<35k',
+                                Income<65000 ~ '35k-65k',
+                                TRUE ~ '>=65k'),
+         Response=case_when((Response==1 | AcceptedCmp1==1 | AcceptedCmp2==1 | 
+                              AcceptedCmp3==1 | AcceptedCmp4==1 | AcceptedCmp5==1) ~ 1,
+                            TRUE ~ 0)) 
+# Assuming data is extracted around 30th June 2014
+# Assuming parents of customers do not stay with them
+summary(marketing_proc)
+```
+
+### Response is 1 if any of the accepted or response variables is 1. Thus, response rate is mean of that column, 27%
+
+## Customer Attributes
+
+### Age
+
+```{r}
+qplot(marketing_proc$Age, geom='histogram', xlim=c(15,80), bins=20)
+```
+
+Biggest customer group is in age group of 35 to 45. Few people above 100 yrs old are excluded from the view for better view.
+
+### Education
+
+```{r}
+qplot(marketing_proc$Education, geom="bar")
+```
+
+Customer base seems to be atleast Graduates mostly
+
+### Income
+
+```{r}
+qplot(marketing_proc$Income, geom='histogram', xlim=c(0,200000))
+```
+
+Income is nearly symmetrically distributed around \$50000 with a few people around \$150,000 and one person with over \$600,000
+
+### Marital Status
+
+```{r}
+qplot(marketing_proc$Marital_Status, geom="bar")
+```
+
+Mostly Married and Together and Divorced, so consistent with the middle aged group
+
+### People at Home
+
+```{r}
+qplot(marketing_proc$People_at_home, geom='bar')
+```
+
+Mostly 2 or 3 people in a family(Mostly one person would make food purchases for entire family)
+
+### Country
+
+```{r}
+qplot(marketing_proc$Country, geom='bar')
+```
+
+Over half the customer base is from SP(possibly Spain)
+
+## Purchases
+
+### Amount spent on Fruits
+
+```{r}
+qplot(marketing_proc$MntFruits, geom = 'histogram')
+```
+
+Mostly between \$0 to \$25
+
+### Amount spent on Fish
+
+```{r}
+qplot(marketing_proc$MntFishProducts, geom = 'histogram')
+```
+
+Mostly between \$0 to \$40
+
+### Amount spent on Meat
+
+```{r}
+qplot(marketing_proc$MntMeatProducts, geom = 'histogram')
+```
+
+Mostly between \$0 to \$25 but people may spend upto \$1500 on meat
+
+### Amount spent on Sweets
+
+```{r}
+qplot(marketing_proc$MntSweetProducts, geom = 'histogram')
+```
+
+Mostly between \$0 to \$50
+
+### Amount spent on Wines
+
+```{r}
+qplot(marketing_proc$MntWines, geom = 'histogram')
+```
+
+Spending on Wine is huge, even upto $1000 by some
+
+### Amount spent on Gold
+
+```{r}
+qplot(marketing_proc$MntGoldProds, geom = 'histogram')
+```
+
+People are mostly spending upto $50 on gold
+
+## Which demographic is most likely to give a response?
+
+```{r}
+marketing_proc %>% 
+  group_by(Age_bin) %>%
+  summarise(avg_response = mean(Response)) %>%
+  ggplot() +
+  geom_col(aes(x=Age_bin, y=avg_response)) 
+```
+
+```{r}
+marketing_proc %>% 
+  group_by(Income_bin) %>%
+  summarise(avg_response = mean(Response)) %>%
+  ggplot() +
+  geom_col(aes(x=Income_bin, y=avg_response)) 
+```
+
+Response is significantly higher in the highest income group
+
+```{r}
+marketing_proc %>% 
+  group_by(People_at_home) %>%
+  summarise(avg_response = mean(Response)) %>%
+  ggplot() +
+  geom_col(aes(x=People_at_home, y=avg_response)) 
+```
+
+Highest response rate is in the below 35 age group.
+
+```{r}
+marketing_proc %>% 
+  group_by(Age_bin, Income_bin) %>%
+  summarise(avg_response = mean(Response)) %>%
+  ggplot() +
+  geom_col(aes(x=Age_bin, y=avg_response, fill=Income_bin), position='dodge') 
+```
+
+```{r}
+marketing_proc %>% 
+  group_by(People_at_home, Income_bin) %>%
+  summarise(avg_response = mean(Response)) %>%
+  ggplot() +
+  geom_col(aes(x=People_at_home, y=avg_response, fill=Income_bin), position='dodge') 
+```
+
+## Correlation
+```{r, fig.width = 14, fig.height = 11}
+fil <- marketing_proc %>% select(-c(Country, Marital_Status, Education, Dt_Customer, Age_bin, Income_bin)) %>%
+  filter(!is.na(Income))
+M <- cor(fil)
+corrplot(M)
+```
+
+## Who's making the most purchase in each Product category?(So that we can market the right product to the right demographic)
+
+```{r}
+marketing_proc %>% 
+  group_by(Age_bin) %>%
+  summarise(avg_fruit_expense=mean(MntFruits),
+            avg_fish_expense=mean(MntFishProducts),
+            avg_meat_expense=mean(MntMeatProducts),
+            avg_wine_expense=mean(MntWines),
+            avg_gold_expense=mean(MntGoldProds),
+            avg_sweet_expense=mean(MntSweetProducts)) %>%
+  gather("Group","Expense", -Age_bin) %>%
+  ggplot() +
+  geom_col(aes(x=Age_bin, y=Expense, fill=Group), position = 'dodge') 
+```
+
+Older People spend more on Wine
+
+```{r}
+marketing_proc %>% 
+  group_by(Income_bin) %>%
+  summarise(avg_fruit_expense=mean(MntFruits),
+            avg_fish_expense=mean(MntFishProducts),
+            avg_meat_expense=mean(MntMeatProducts),
+            avg_wine_expense=mean(MntWines),
+            avg_gold_expense=mean(MntGoldProds),
+            avg_sweet_expense=mean(MntSweetProducts)) %>%
+  gather("Group","Expense", -Income_bin) %>%
+  ggplot() +
+  geom_col(aes(x=Income_bin, y=Expense, fill=Group), position = 'dodge') 
+```
+
+Richer people spend more on all product groups but especially meat and wine
+
+## Who uses which channel more?
+```{r}
+marketing_proc %>% 
+  group_by(People_at_home) %>%
+  summarise(avg_deals_purchases=mean(NumDealsPurchases),
+            avg_web_purchases=mean(NumWebPurchases),
+            avg_catalog_purchases=mean(NumCatalogPurchases),
+            avg_store_purchases=mean(NumStorePurchases)) %>%
+  gather("Group","Purchases", -People_at_home) %>%
+  ggplot() +
+  geom_col(aes(x=People_at_home, y=Purchases, fill=Group), position = 'dodge') 
+```
+
+When there are more people in the house, people prefer deals over catalogs.
+
+```{r}
+marketing_proc %>% 
+  group_by(Income_bin) %>%
+  summarise(avg_deals_purchases=mean(NumDealsPurchases),
+            avg_web_purchases=mean(NumWebPurchases),
+            avg_catalog_purchases=mean(NumCatalogPurchases),
+            avg_store_purchases=mean(NumStorePurchases),
+            avg_web_visits=mean(NumWebVisitsMonth)) %>%
+  gather("Group","Purchases", -Income_bin) %>%
+  ggplot() +
+  geom_col(aes(x=Income_bin, y=Purchases, fill=Group), position = 'dodge') 
+```
+
+People with higher income spend more but people with lower income visit the site more.
+
